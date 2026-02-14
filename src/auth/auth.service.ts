@@ -1,33 +1,44 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, InternalServerErrorException } from '@nestjs/common';
+import { SupabaseService } from '../supabase/supabase.service';
 import { UsersService } from '../users/users.service';
-import { JwtService } from '@nestjs/jwt';
 
 @Injectable()
 export class AuthService {
     constructor(
+        private supabaseService: SupabaseService,
         private usersService: UsersService,
-        private jwtService: JwtService,
     ) { }
 
     async sendOtp(phone: string) {
-        // Mock OTP service
-        console.log(`OTP for ${phone} is 1234`);
-        return { message: 'OTP sent successfully', mockOtp: '1234' };
+        const { error } = await this.supabaseService.getClient().auth.signInWithOtp({
+            phone,
+        });
+        if (error) {
+            throw new InternalServerErrorException(error.message);
+        }
+        return { message: 'OTP sent successfully' };
     }
 
     async verifyOtp(phone: string, otp: string) {
-        if (otp !== '1234') {
-            throw new UnauthorizedException('Invalid OTP');
+        const { data, error } = await this.supabaseService.getClient().auth.verifyOtp({
+            phone,
+            token: otp,
+            type: 'sms',
+        });
+
+        if (error || !data.user || !data.session) {
+            throw new UnauthorizedException(error?.message || 'Verification failed');
         }
 
+        // Sync with local DB
         let user = await this.usersService.findByPhone(phone);
         if (!user) {
             user = await this.usersService.create({ phone });
         }
 
-        const payload = { sub: user.id, phone: user.phone };
         return {
-            access_token: this.jwtService.sign(payload),
+            access_token: data.session.access_token,
+            refresh_token: data.session.refresh_token,
             user,
         };
     }
